@@ -6,6 +6,8 @@
 enum MESSAGE_TYPES {
   RECV_CHUNK,
   SEND_CHUNK,
+  SEND_VECTOR,
+  SEND_M,
   DONE_CHUNK,
   SEND_CHUNK_NUMBER,
   NO_CHUNK
@@ -14,8 +16,9 @@ enum MESSAGE_TYPES {
 enum CHUNK_STATE { AVAILABLE, DONE };
 
 int main(int argc, char **argv) {
-  int rank, size, n, m, t, recv_flag, done_flag,
-      chunks = 0, *matrix, *vector, *result, *tempbuf, *chunk, snd_data[2];
+  int rank, size, n, m, t, flag1, flag2, chunks = 0, *matrix, *vector, *result,
+                                         *tempbuf, *chunk, snd_data[2],
+                                         snd_nm[2];
 
   MPI_Init(&argc, &argv);
 
@@ -29,9 +32,11 @@ int main(int argc, char **argv) {
       printf("what is the number of rows of the matrix: ");
       scanf("%d", &n);
 
-      printf("what is the number of rows of the matrix: ");
+      printf("what is the number of columns of the matrix: ");
       scanf("%d", &m);
 
+      snd_nm[0] = n;
+      snd_nm[1] = m;
       matrix = malloc(sizeof(int) * n * m);
       vector = malloc(sizeof(int) * m);
       result = malloc(sizeof(int) * m);
@@ -59,23 +64,28 @@ int main(int argc, char **argv) {
 
       while (1) {
         for (int i = 1; i < size; i++) {
-          MPI_Iprobe(i, RECV_CHUNK, MPI_COMM_WORLD, &recv_flag, NULL);
-          MPI_Iprobe(i, DONE_CHUNK, MPI_COMM_WORLD, &done_flag, NULL);
+          MPI_Iprobe(i, RECV_CHUNK, MPI_COMM_WORLD, &flag1, NULL);
+          MPI_Iprobe(i, DONE_CHUNK, MPI_COMM_WORLD, &flag2, NULL);
 
-          if (recv_flag) {
+          if (flag1) {
+            MPI_Irecv(NULL, 0, MPI_INT, i, RECV_CHUNK, MPI_COMM_WORLD, NULL);
             if (chunks < n) {
-              MPI_Send(matrix + (chunks * n), m, MPI_INT, i, SEND_CHUNK,
-                       MPI_COMM_WORLD);
-              MPI_Send(&chunks, 1, MPI_INT, i, SEND_CHUNK_NUMBER,
-                       MPI_COMM_WORLD);
+              MPI_Isend(&m, 1, MPI_INT, i, SEND_M, MPI_COMM_WORLD, NULL);
+              MPI_Isend(matrix + (chunks * n), m, MPI_INT, i, SEND_CHUNK,
+                        MPI_COMM_WORLD, NULL);
+              MPI_Isend(vector, m, MPI_INT, i, SEND_VECTOR, MPI_COMM_WORLD,
+                        NULL);
+              MPI_Isend(&chunks, 1, MPI_INT, i, SEND_CHUNK_NUMBER,
+                        MPI_COMM_WORLD, NULL);
               chunks++;
             } else {
-              MPI_Send(&recv_flag, 1, MPI_INT, i, NO_CHUNK, MPI_COMM_WORLD);
+              MPI_Isend(NULL, 0, MPI_INT, i, NO_CHUNK, MPI_COMM_WORLD, NULL);
             }
           }
 
-          if (done_flag) {
-            MPI_Recv(snd_data, 2, MPI_INT, i, DONE_CHUNK, MPI_COMM_WORLD, NULL);
+          if (flag2) {
+            MPI_Irecv(snd_data, 2, MPI_INT, i, DONE_CHUNK, MPI_COMM_WORLD,
+                      NULL);
             chunk[snd_data[1]] = DONE;
             result[snd_data[1]] = snd_data[0];
           }
@@ -110,9 +120,46 @@ int main(int argc, char **argv) {
 
       printf("is the vector:\n");
       for (int i = 0; i < n; i++) {
-        printf("%d\n", vector[i]);
+        printf("%d\n", result[i]);
       }
+
+      free(matrix);
+      free(vector);
+      free(result);
+      free(chunk);
     } else {
+      while (1) {
+        MPI_Isend(NULL, 0, MPI_INT, 0, RECV_CHUNK, MPI_COMM_WORLD, NULL);
+
+        while (1) {
+          MPI_Iprobe(0, NO_CHUNK, MPI_COMM_WORLD, &flag1, NULL);
+          MPI_Iprobe(0, SEND_CHUNK, MPI_COMM_WORLD, &flag2, NULL);
+
+          if (flag1) {
+            MPI_Irecv(NULL, 0, MPI_INT, 0, NO_CHUNK, MPI_COMM_WORLD, NULL);
+            break;
+          } else if (flag2) {
+            t = 0;
+            MPI_Irecv(&m, 1, MPI_INT, 0, SEND_M, MPI_COMM_WORLD, NULL);
+            MPI_Irecv(chunk, snd_nm[1], MPI_INT, 0, SEND_CHUNK, MPI_COMM_WORLD,
+                      NULL);
+            MPI_Irecv(vector, snd_nm[0], MPI_INT, 0, SEND_VECTOR,
+                      MPI_COMM_WORLD, NULL);
+            MPI_Irecv(&chunks, 1, MPI_INT, 0, SEND_CHUNK_NUMBER, MPI_COMM_WORLD,
+                      NULL);
+
+            for (int i = 0; i < m; i++) {
+              t += (chunk[i] * vector[i]);
+            }
+
+            snd_data[0] = t;
+            snd_data[1] = chunks;
+            MPI_Isend(snd_data, 2, MPI_INT, 0, DONE_CHUNK, MPI_COMM_WORLD,
+                      NULL);
+            break;
+          }
+        }
+      }
     }
   }
 
